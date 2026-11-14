@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name         Video Wheel Controller
-// @namespace    video-wheel-controller
+// @namespace    https://github.com/AdhityaSar/video-wheel-controller
 // @version      2026-11-14
 // @description  Custom video seeking (1s Shift, 5s normal, 1m Ctrl), F key fullscreen, and 3x3 mouse wheel grid controls (playback rate / seek / volume) with RMB frame stepping and video/chapter navigation.
 // @author       AdhityaSar
+// @license      GPL-3.0-or-later
+// @homepageURL  https://github.com/AdhityaSar/video-wheel-controller
+// @supportURL   https://github.com/AdhityaSar/video-wheel-controller/issues
 // @match        *://*/*
 // @run-at       document-end
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
