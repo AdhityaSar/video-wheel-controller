@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Video Wheel Controller - 3x3 wheel zone test</title>
+<style>
+    :root { color-scheme: dark; }
+    body { margin: 0; padding: 16px; background: #111; color: #eee;
+           font: 13px/1.6 Consolas, "Courier New", monospace; }
+    h1 { font-size: 15px; margin: 0 0 12px; }
+    #stage { position: relative; width: 900px; height: 600px; }
+    video { width: 900px; height: 600px; background: #000; display: block; }
+    #grid { position: absolute; pointer-events: none; display: none; }
+    #grid.on { display: block; }
+    .cell { position: absolute; box-sizing: border-box; border: 1px dashed rgba(90, 180, 255, .85);
+            padding: 6px; font-size: 11px; line-height: 1.5; color: #b9e2ff; white-space: pre-line; }
+    #panel { position: fixed; top: 8px; right: 8px; width: 330px; background: #1b1b1b;
+             border: 1px solid #333; border-radius: 6px; padding: 10px; }
+    #panel h2 { font-size: 12px; margin: 10px 0 4px; color: #aaa; text-transform: uppercase; }
+    #panel h2:first-child { margin-top: 0; }
+    #stats b { color: #fff; }
+    .k { display: inline-block; min-width: 110px; color: #8fd; }
+    .hint { color: #999; margin-top: 10px; font-size: 11px; }
+    button, input[type=file] { width: 100%; margin: 4px 0; background: #222; color: #eee;
+             border: 1px solid #444; padding: 4px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<h1>Video Wheel Controller &mdash; 3&times;3 wheel zone test</h1>
+
+<div id="stage">
+    <video id="v" playsinline loop></video>
+    <div id="grid"></div>
+</div>
+
+<div id="panel">
+    <h2>State</h2>
+    <div id="stats">
+        <span class="k">currentTime</span><b id="s-time">-</b><br>
+        <span class="k">duration</span><b id="s-dur">-</b><br>
+        <span class="k">volume</span><b id="s-vol">-</b><br>
+        <span class="k">muted</span><b id="s-mute">-</b><br>
+        <span class="k">playbackRate</span><b id="s-rate">-</b><br>
+        <span class="k">measured fps</span><b id="s-frame">-</b>
+    </div>
+
+    <h2>Media</h2>
+    <input type="file" id="file" accept="video/*">
+    <button id="demo">Generate 10s demo clip (canvas + MediaRecorder)</button>
+
+    <h2>Overlay</h2>
+    <label><input type="checkbox" id="showGrid" checked> show zone overlay</label>
+
+    <div class="hint">
+        Plain scroll in a cell = normal action.<br>
+        <b>Hold RMB + scroll</b> for the RMB actions:<br>
+        top-middle = next / previous video,<br>
+        middle-middle = next / previous chapter,<br>
+        bottom-middle = +1 / -1 frame.<br>
+        The grid is drawn over the picture area, which is what the script uses.
+    </div>
+</div>
+
+<!-- the userscript itself -->
+<script src="video-wheel-controller.user.js"></script>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------
+// Zone overlay (mirrors the reference 3x3 image)
+// ---------------------------------------------------------------
+const LABELS = [
+    ['Increase Playback Rate By 0.5x\nDecrease Playback Rate By 0.5x',
+     'Fast Forward 5%\nRewind 5%\nRMB up: Next Video\nRMB down: Previous Video',
+     'Increase Volume By 10%\nDecrease Volume By 10%'],
+    ['Increase Playback Rate By 0.25x\nDecrease Playback Rate By 0.25x',
+     'Fast Forward 5 Seconds\nRewind 5 Seconds\nRMB up: Next Chapter\nRMB down: Previous Chapter',
+     'Increase Volume By 5%\nDecrease Volume By 5%'],
+    ['Increase Playback Rate By 0.1x\nDecrease Playback Rate By 0.1x',
+     'Fast Forward 1 Second\nRewind 1 Second\nRMB up: +1 Frame\nRMB down: -1 Frame',
+     'Increase Volume By 1%\nDecrease Volume By 1%']
+];
+
+const grid = document.getElementById('grid');
+LABELS.forEach((rowLabels, r) => rowLabels.forEach((text, c) => {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.style.left = (c * 100 / 3) + '%';
+    cell.style.top = (r * 100 / 3) + '%';
+    cell.style.width = (100 / 3) + '%';
+    cell.style.height = (100 / 3) + '%';
+    cell.textContent = text;
+    grid.appendChild(cell);
+}));
+
+// The userscript maps its zones onto the PICTURE box (object-fit), so the
+// overlay has to cover that same box or the labels lie about where to scroll.
+function syncGridToPicture() {
+    const v = document.getElementById('v');
+    const stage = document.getElementById('stage');
+    const sr = stage.getBoundingClientRect();
+    const vr = v.getBoundingClientRect();
+    const fit = getComputedStyle(v).objectFit || 'fill';
+
+    let box = { left: vr.left - sr.left, top: vr.top - sr.top, width: vr.width, height: vr.height };
+    if ((fit === 'contain' || fit === 'scale-down' || fit === 'cover') && v.videoWidth > 0) {
+        let s = fit === 'cover'
+            ? Math.max(vr.width / v.videoWidth, vr.height / v.videoHeight)
+            : Math.min(vr.width / v.videoWidth, vr.height / v.videoHeight);
+        if (fit === 'scale-down') s = Math.min(s, 1);
+        box = {
+            left: vr.left - sr.left + (vr.width - v.videoWidth * s) / 2,
+            top: vr.top - sr.top + (vr.height - v.videoHeight * s) / 2,
+            width: v.videoWidth * s,
+            height: v.videoHeight * s
+        };
+    }
+
+    grid.style.left = box.left + 'px';
+    grid.style.top = box.top + 'px';
+    grid.style.width = box.width + 'px';
+    grid.style.height = box.height + 'px';
+}
+
+document.getElementById('v').addEventListener('loadedmetadata', syncGridToPicture);
+addEventListener('resize', syncGridToPicture);
+syncGridToPicture();
+
+document.getElementById('showGrid').addEventListener('change', (e) => {
+    grid.classList.toggle('on', e.target.checked);
+});
+grid.classList.add('on');
+
+// ---------------------------------------------------------------
+// Live state readout
+// ---------------------------------------------------------------
+const v = document.getElementById('v');
+const out = {
+    time: document.getElementById('s-time'),
+    dur: document.getElementById('s-dur'),
+    vol: document.getElementById('s-vol'),
+    mute: document.getElementById('s-mute'),
+    rate: document.getElementById('s-rate'),
+    frame: document.getElementById('s-frame')
+};
+
+const fmt = (n, digits) => Number(n).toFixed(digits === undefined ? 3 : digits);
+
+function tick() {
+    out.time.textContent = fmt(v.currentTime);
+    out.dur.textContent = isFinite(v.duration) ? fmt(v.duration) : String(v.duration);
+    out.vol.textContent = fmt(v.volume, 2);
+    out.mute.textContent = String(v.muted);
+    out.rate.textContent = fmt(v.playbackRate, 2) + 'x';
+    out.frame.textContent = v.__ccvFrameDuration
+        ? fmt(1 / v.__ccvFrameDuration, 2) + ' fps (1 frame = ' + fmt(v.__ccvFrameDuration, 4) + 's)'
+        : 'not measured yet (fallback 30 fps)';
+    requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---------------------------------------------------------------
+// Media source: local file (best) or a generated demo clip
+// ---------------------------------------------------------------
+document.getElementById('file').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    v.src = URL.createObjectURL(file);
+    v.load();
+    v.play().catch(() => {});
+});
+
+function makeDemoClip(seconds) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    const stream = canvas.captureStream(30);
+    const chunks = [];
+    const rec = new MediaRecorder(stream, { mimeType: 'video/webm' });
+    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+
+    let frame = 0;
+    const timer = setInterval(() => {
+        frame++;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, 640, 360);
+        ctx.fillStyle = '#0f0';
+        ctx.fillRect(20 + (frame % 100) * 6, 310, 18, 18);
+        ctx.fillStyle = '#fff';
+        ctx.font = '28px monospace';
+        ctx.fillText('frame ' + frame, 24, 60);
+        ctx.fillText('demo clip', 24, 100);
+    }, 1000 / 30);
+
+    rec.start();
+    return new Promise((resolve, reject) => {
+        setTimeout(() => {
+            rec.stop();
+            clearInterval(timer);
+        }, seconds * 1000);
+
+        rec.onstop = () => {
+            const url = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+
+            // MediaRecorder blobs report duration = Infinity until the browser
+            // has scanned to the end once. Nudge it on a throwaway element.
+            const probe = document.createElement('video');
+            probe.preload = 'metadata';
+            probe.onerror = () => resolve(url);
+            probe.onloadedmetadata = () => {
+                if (probe.duration !== Infinity) return resolve(url);
+                probe.currentTime = 1e101;
+                probe.ontimeupdate = () => {
+                    probe.ontimeupdate = null;
+                    probe.currentTime = 0;
+                    resolve(url);
+                };
+            };
+            probe.src = url;
+        };
+
+        rec.onerror = () => reject(new Error('MediaRecorder failed'));
+    });
+}
+
+document.getElementById('demo').addEventListener('click', async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'Recording 10s...';
+    try {
+        v.src = await makeDemoClip(10);
+        v.load();
+        await v.play();
+    } catch (err) {
+        alert('Demo generation failed: ' + err.message + '\nPlease use the file picker instead.');
+    }
+    btn.disabled = false;
+    btn.textContent = label;
+});
+</script>
+
+</body>
+</html>
